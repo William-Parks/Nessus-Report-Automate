@@ -1,0 +1,80 @@
+import requests
+import json
+import time
+import os
+from urllib3.exceptions import InsecureRequestWarning
+
+# Suppress only the single warning from urllib3 needed.
+requests.packages.urllib3.disable_warnings(category=InsecureRequestWarning)
+
+class NessusManager:
+    def __init__(self, url, access_key, secret_key):
+        self.url = url
+        self.headers = {
+            'X-ApiKeys': f'accessKey={access_key}; secretKey={secret_key}',
+            'Content-Type': 'application/json'
+        }
+
+    def get_scans(self):
+        response = requests.get(f'{self.url}/scans', headers=self.headers, verify=False)
+        return response.json()['scans']
+
+    def export_report(self, scan_id, format_type, chapters=None):
+        export_data = {'format': format_type}
+        if chapters:
+            export_data['chapters'] = chapters
+        response = requests.post(f'{self.url}/scans/{scan_id}/export', 
+                                 headers=self.headers, 
+                                 data=json.dumps(export_data),
+                                 verify=False)
+        return response.json()['file']
+
+    def get_export_status(self, scan_id, file_id):
+        response = requests.get(f'{self.url}/scans/{scan_id}/export/{file_id}/status',
+                                headers=self.headers,
+                                verify=False)
+        return response.json()['status'] == 'ready'
+
+    def download_report(self, scan_id, file_id, filename):
+        response = requests.get(f'{self.url}/scans/{scan_id}/export/{file_id}/download',
+                                headers=self.headers,
+                                verify=False)
+        with open(filename, 'wb') as f:
+            f.write(response.content)
+
+def main():
+    # Replace with your Nessus server details and API keys
+    nessus = NessusManager('https://127.0.0.1:8834', 'ACCESS_KEY', 'SECRET_KEY')
+    
+    scans = nessus.get_scans()
+    print(f"Found {len(scans)} scans.")
+
+    for scan in scans:
+        scan_id = scan['id']
+        scan_name = scan['name']
+        print(f"\nProcessing scan: {scan_name}")
+
+        # Define report types and their corresponding export settings
+        report_types = [
+            ('Vulnerabilities by host', 'pdf', 'vuln_by_host', '_HOST'),
+            ('Vulnerabilities by plugin', 'pdf', 'vuln_by_plugin', '_PLUGIN'),
+            ('CSV', 'csv', None, '')
+        ]
+
+        for report_name, format_type, chapters, suffix in report_types:
+            print(f"  Generating {report_name} report...")
+            file_id = nessus.export_report(scan_id, format_type, chapters)
+
+            # Wait for the export to be ready
+            while not nessus.get_export_status(scan_id, file_id):
+                time.sleep(1)
+
+            # Download and save the report
+            filename = f"{scan_name}{suffix}.{format_type}"
+            nessus.download_report(scan_id, file_id, filename)
+            print(f"    Saved as: {filename}")
+
+    print("\nAll reports generated successfully!")
+
+if __name__ == "__main__":
+    main()
